@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PokeSwipe — Keep or Discard</title>
+  <style>
+    :root {
+      --bg: #0f1220; --card:#181c33; --accent:#6ee7ff; --accent2:#8b5cf6; --text:#e7ecff; --muted:#9aa3c7;
+      --keep:#16a34a; --discard:#ef4444;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: radial-gradient(1200px 800px at 80% -10%, #1b2142 0%, var(--bg) 60%); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; }
+    a { color: var(--accent); }
+    .app { max-width: 900px; margin: 0 auto; padding: 24px; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
+    header h1 { font-size: clamp(20px, 3vw, 28px); margin: 0; letter-spacing: 0.3px; }
+    .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    button, .btn {
+      border: 1px solid #2a305a; background: linear-gradient(180deg,#1c2246, #141833);
+      color: var(--text); padding: 10px 14px; border-radius: 10px; cursor: pointer; font-weight: 600;
+    }
+    button:hover { border-color:#3a4385; }
+    .pill { padding: 6px 10px; border-radius:20px; background:#151a36; border:1px solid #2a305a; color:var(--muted); }
+    .stack { position: relative; height: min(72vh, 680px); margin-top: 16px; }
+    .card {
+      position: absolute; inset: 0; margin:auto; width:min(560px, 92%); height:100%;
+      background: linear-gradient(180deg, #1a1f3b 0%, #13172f 70%); border:1px solid #2a305a; border-radius:18px;
+      box-shadow: 0 20px 40px rgba(0,0,0,.35);
+      display:flex; flex-direction:column; overflow:hidden; touch-action: none;
+      will-change: transform, opacity;
+    }
+    .card.hidden { display:none; }
+    .artWrap { flex:1; display:grid; place-items:center; padding:16px; }
+    .artWrap img { max-width: 96%; max-height: 100%; object-fit: contain; filter: drop-shadow(0 12px 16px rgba(0,0,0,.45)); }
+    .meta {
+      border-top: 1px solid #232a57; padding:14px 16px; display:flex; justify-content:space-between; align-items:center;
+      background: linear-gradient(180deg, #161a36, #0f1330);
+    }
+    .name { font-size: 20px; font-weight:700; letter-spacing:.3px; }
+    .dex { color: var(--muted); }
+    .hint {
+      position:absolute; top:16px; width:100%; display:flex; justify-content:space-between; padding:0 20px; pointer-events:none;
+      font-weight:800; letter-spacing:.8px; text-transform:uppercase; opacity:.0; transition:opacity .2s ease;
+    }
+    .hint.show { opacity:.25; }
+    .left, .right { padding:6px 10px; border-radius:12px; }
+    .left { color:#ffd5d5; background: rgba(239,68,68,.2); border:1px solid rgba(239,68,68,.4); }
+    .right { color:#d6ffe1; background: rgba(22,163,74,.2); border:1px solid rgba(22,163,74,.4); }
+    .actions { display:flex; justify-content:center; gap:14px; margin-top: 18px; }
+    .round {
+      width:54px; height:54px; border-radius:50%; display:grid; place-items:center; font-size:22px; border:1px solid #2a305a;
+      background: #131733; box-shadow: inset 0 0 18px rgba(255,255,255,.04);
+    }
+    .round.discard { border-color: rgba(239,68,68,.5); }
+    .round.keep    { border-color: rgba(22,163,74,.5); }
+    .footerNote { margin-top: 10px; color: var(--muted); font-size: 13px; }
+    .results { display:none; margin-top: 20px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:12px; }
+    .tile {
+      background:#121633; border:1px solid #2a305a; border-radius:14px; padding:10px; display:flex; flex-direction:column; gap:6px; align-items:center;
+    }
+    .tile img { width:100px; height:100px; object-fit:contain; }
+    .tile .label { text-align:center; font-size:14px; color:#dfe6ff; }
+    .muted { color: var(--muted); }
+    .copy { margin-left:8px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>PokeSwipe <span class="pill">National Dex</span></h1>
+      <div class="controls">
+        <label class="pill"><input id="randomize" type="checkbox" /> random order</label>
+        <button id="start">Start</button>
+        <button id="finish" disabled>Finish</button>
+      </div>
+    </header>
+    <div id="stack" class="stack">
+      <div id="loader" class="card" style="display:grid; place-items:center;">
+        <div>
+          <div class="pill" style="display:inline-block">Loading Pokédex…</div>
+          <div class="footerNote">First load fetches names & caches them locally.</div>
+        </div>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="btnDiscard" class="round discard" title="Discard (Left)">❌</button>
+      <button id="btnKeep" class="round keep" title="Keep (Right)">✅</button>
+    </div>
+    <div class="footerNote">Tip: ← / → keys also work. Swipe on touch.</div>
+    <section class="results" id="results">
+      <h2>Kept Pokémon (<span id="keptCount">0</span>)</h2>
+      <div style="margin:8px 0;">
+        <button id="copyNames" class="btn copy">Copy names</button>
+        <span class="muted" id="copyStatus"></span>
+      </div>
+      <div class="grid" id="keptGrid"></div>
+    </section>
+  </div>
+  <script>
+    const API_LIST = 'https://pokeapi.co/api/v2/pokemon?limit=2000';
+    const ART_URL = id => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${id}.png`;
+    const state = { all: [], order: [], idx: 0, kept: [], discarded: [], cacheKey: 'pokeswipe:list:v1' };
+    async function loadList() {
+      const cached = localStorage.getItem(state.cacheKey);
+      if (cached) { state.all = JSON.parse(cached); return; }
+      const res = await fetch(API_LIST);
+      const data = await res.json();
+      const list = data.results.map(r => {
+        const m = r.url.match(/\/pokemon\/(\d+)\//);
+        return m ? { id: +m[1], name: r.name } : null;
+      }).filter(Boolean).sort((a,b) => a.id - b.id);
+      state.all = list;
+      localStorage.setItem(state.cacheKey, JSON.stringify(list));
+    }
+    function shuffle(arr){for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}return arr;}
+    function titleCase(n){return n.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
+    function buildOrder(){const base=state.all.slice();state.order=document.getElementById('randomize').checked?shuffle(base):base;state.idx=0;}
+    function createCard(p){const c=document.createElement('div');c.className='card';c.innerHTML=`
+      <div class="artWrap"><img src="${ART_URL(p.id)}" alt="${titleCase(p.name)}"></div>
+      <div class="meta"><div class="name">#${String(p.id).padStart(4,'0')} — ${titleCase(p.name)}</div><div class="dex">National Dex</div></div>`;
+      c.onclick=()=>fling(c,0,0,true,p);return c;}
+    function mountNext(n=3){const st=document.getElementById('stack');const existing=[...st.querySelectorAll('.card')];const need=Math.max(0,n-existing.length);
+      for(let i=0;i<need&&state.idx<state.order.length;i++){const p=state.order[state.idx++];st.appendChild(createCard(p));}
+      if(state.idx>=state.order.length&&st.querySelectorAll('.card').length<=1)showResults();}
+    function fling(card,x,y,keep,p){if(!card.isConnected)return;card.remove();(keep?state.kept:state.discarded).push(p);mountNext(3);}
+    function showResults(){document.getElementById('stack').innerHTML='';const kept=state.kept;document.getElementById('keptCount').textContent=kept.length;
+      const grid=document.getElementById('keptGrid');grid.innerHTML='';kept.forEach(p=>{const t=document.createElement('div');t.className='tile';t.innerHTML=`
+        <img src="${ART_URL(p.id)}"><div class="label">#${String(p.id).padStart(4,'0')}<br>${titleCase(p.name)}</div>`;grid.appendChild(t);});
+      document.getElementById('results').style.display='block';}
+    (async()=>{await loadList();document.getElementById('loader').remove();})();document.getElementById('start').onclick=()=>{buildOrder();mountNext(3);};
+    document.getElementById('finish').onclick=showResults;
+  </script>
+</body>
+</html>
