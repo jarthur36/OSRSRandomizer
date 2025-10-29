@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PokeSwipe — fixed stack</title>
+  <style>
+    :root { --bg:#0f1220; --text:#e7ecff; --muted:#9aa3c7; }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:radial-gradient(1200px 800px at 80% -10%, #1b2142 0%, var(--bg) 60%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial}
+    .app{max-width:900px;margin:0 auto;padding:24px}
+    header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+    .pill{padding:6px 10px;border-radius:20px;background:#151a36;border:1px solid #2a305a;color:var(--muted)}
+    button{border:1px solid #2a305a;background:linear-gradient(180deg,#1c2246,#141833);color:var(--text);padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:600}
+    .stack{position:relative;height:min(72vh,680px);margin-top:16px}
+    .card{position:absolute;inset:0;margin:auto;width:min(560px,92%);height:100%;background:linear-gradient(180deg,#1a1f3b 0%,#13172f 70%);border:1px solid #2a305a;border-radius:18px;box-shadow:0 20px 40px rgba(0,0,0,.35);display:flex;flex-direction:column;overflow:hidden;touch-action:none;will-change:transform,opacity}
+    .art{flex:1;display:grid;place-items:center;padding:16px}
+    .art img{max-width:96%;max-height:100%;object-fit:contain;filter:drop-shadow(0 12px 16px rgba(0,0,0,.45))}
+    .meta{border-top:1px solid #232a57;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg,#161a36,#0f1330)}
+    .name{font-size:20px;font-weight:700}
+    .actions{display:flex;justify-content:center;gap:14px;margin-top:18px}
+    .round{width:54px;height:54px;border-radius:50%;display:grid;place-items:center;font-size:22px;border:1px solid #2a305a;background:#131733;box-shadow:inset 0 0 18px rgba(255,255,255,.04)}
+    .footerNote{margin-top:10px;color:var(--muted);font-size:13px}
+    .results{display:none;margin-top:20px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+    .tile{background:#121633;border:1px solid #2a305a;border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:6px;align-items:center}
+    .tile img{width:100px;height:100px;object-fit:contain}
+    .tile .label{text-align:center;font-size:14px;color:#dfe6ff}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>PokeSwipe <span class="pill">National Dex</span></h1>
+      <div style="display:flex;gap:8px;align-items:center">
+        <label class="pill"><input id="randomize" type="checkbox" /> random order</label>
+        <button id="start">Start</button>
+        <button id="finish" disabled>Finish</button>
+      </div>
+    </header>
+
+    <div id="stack" class="stack">
+      <div id="loader" class="card" style="display:grid;place-items:center">
+        <div><div class="pill" style="display:inline-block">Loading Pokédex…</div></div>
+      </div>
+    </div>
+
+    <div class="actions" id="actionBar" style="display:none">
+      <button id="btnDiscard" class="round" title="Discard (Left)">❌</button>
+      <button id="btnKeep" class="round" title="Keep (Right)">✅</button>
+    </div>
+    <div class="footerNote">Tip: ← / → keys also work. Swipe on touch.</div>
+
+    <section class="results" id="results">
+      <h2>Kept Pokémon (<span id="keptCount">0</span>)</h2>
+      <div class="grid" id="keptGrid"></div>
+    </section>
+  </div>
+
+  <script>
+    const API_LIST = 'https://pokeapi.co/api/v2/pokemon?limit=2000';
+    const ART_URL = id => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${id}.png`;
+
+    const state = {
+      all: [], order: [], idx: 0, kept: [], discarded: [],
+      cacheKey: 'pokeswipe:list:v2',
+      lock: false
+    };
+
+    const stackEl = document.getElementById('stack');
+
+    async function loadList(){
+      const cached = localStorage.getItem(state.cacheKey);
+      if (cached) { state.all = JSON.parse(cached); return; }
+      const res = await fetch(API_LIST);
+      const data = await res.json();
+      const list = data.results.map(r=>{
+        const m = r.url.match(/\/pokemon\/(\d+)\//);
+        return m ? { id:+m[1], name:r.name } : null;
+      }).filter(Boolean).sort((a,b)=>a.id-b.id);
+      state.all = list;
+      localStorage.setItem(state.cacheKey, JSON.stringify(list));
+    }
+
+    function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+    const tc = s => s.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+
+    function buildOrder(){
+      const base = state.all.slice();
+      state.order = document.getElementById('randomize').checked ? shuffle(base) : base;
+      state.idx = 0;
+    }
+
+    function createCard(p){
+      const c = document.createElement('div');
+      c.className = 'card';
+      c.dataset.id = p.id;
+      c.innerHTML = `
+        <div class="art">
+          <img loading="lazy" alt="${tc(p.name)}" src="${ART_URL(p.id)}"
+               onerror="this.src='https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${p.id}.png'">
+        </div>
+        <div class="meta"><div class="name">#${String(p.id).padStart(4,'0')} — ${tc(p.name)}</div><div>National Dex</div></div>
+      `;
+      enableGestures(c, p);
+      return c;
+    }
+
+    function updateZ(){
+      const cards = [...stackEl.querySelectorAll('.card:not(#loader)')];
+      cards.forEach((c, i) => {
+        const z = 100 + i;
+        c.style.zIndex = z;
+        const scale = 1 - Math.min(0.02 * (cards.length - 1 - i), 0.06);
+        const ty = 2 * (cards.length - 1 - i);
+        c.style.transform = `translate(0px, ${ty}px) scale(${scale})`;
+        c.style.opacity = i < cards.length - 3 ? 0 : 1;
+      });
+    }
+
+    function mountNext(targetCount=3){
+      const cards = stackEl.querySelectorAll('.card:not(#loader)');
+      const need = Math.max(0, targetCount - cards.length);
+      for (let i=0; i<need && state.idx < state.order.length; i++){
+        stackEl.appendChild(createCard(state.order[state.idx++]));
+      }
+      updateZ();
+      document.getElementById('finish').disabled = state.kept.length + state.discarded.length === 0;
+      if (state.idx >= state.order.length && stackEl.querySelectorAll('.card:not(#loader)').length === 0){
+        showResults();
+      }
+    }
+
+    function enableGestures(card, p){
+      let startX=0, startY=0, x=0, y=0;
+
+      const setTransform = () => {
+        const rot = x/18;
+        card.style.transition = 'none';
+        card.style.transform = `translate(${x}px,${y}px) rotate(${rot}deg)`;
+      };
+
+      const onDown = e => {
+        if (state.lock) return;
+        const top = topCard();
+        if (card !== top) return; // only top card is draggable
+        startX = e.clientX; startY = e.clientY;
+        card.setPointerCapture(e.pointerId);
+      };
+      const onMove = e => {
+        if (!startX && !startY) return;
+        x = e.clientX - startX; y = e.clientY - startY;
+        setTransform();
+      };
+      const onUp = e => {
+        if (!startX && !startY) return;
+        const threshold = 140;
+        const decide = Math.abs(x) > threshold;
+        if (decide){
+          fling(card, x>0, p);
+        } else {
+          card.style.transition = 'transform .22s ease';
+          card.style.transform = '';
+        }
+        startX = startY = 0; x = y = 0;
+      };
+
+      card.addEventListener('pointerdown', onDown);
+      card.addEventListener('pointermove', onMove);
+      card.addEventListener('pointerup', onUp);
+      card.addEventListener('pointercancel', onUp);
+    }
+
+    function topCard(){
+      const cards = [...stackEl.querySelectorAll('.card:not(#loader)')];
+      return cards[cards.length - 1] || null;
+    }
+
+    function fling(card, keep, p){
+      if (state.lock || card.classList.contains('removing')) return;
+      state.lock = true;
+      card.classList.add('removing');
+      const dx = (keep ? 1 : -1) * (window.innerWidth * 1.2);
+      card.style.transition = 'transform .28s ease-out, opacity .28s ease-out';
+      requestAnimationFrame(()=>{
+        card.style.transform = `translate(${dx}px, 0px) rotate(${dx/12}deg)`;
+        card.style.opacity = '0';
+      });
+
+      const onDone = () => {
+        card.removeEventListener('transitionend', onDone);
+        card.remove();
+        (keep ? state.kept : state.discarded).push(p);
+        state.lock = false;
+        mountNext(3);
+      };
+      card.addEventListener('transitionend', onDone);
+    }
+
+    function showResults(){
+      stackEl.innerHTML = '';
+      document.getElementById('actionBar').style.display = 'none';
+      document.getElementById('finish').disabled = true;
+
+      const kept = state.kept;
+      document.getElementById('keptCount').textContent = kept.length;
+      const grid = document.getElementById('keptGrid');
+      grid.innerHTML = '';
+      kept.forEach(p=>{
+        const tile = document.createElement('div');
+        tile.className = 'tile';
+        tile.innerHTML = `
+          <img loading="lazy" src="${ART_URL(p.id)}" onerror="this.src='https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${p.id}.png'">
+          <div class="label">#${String(p.id).padStart(4,'0')}<br>${tc(p.name)}</div>
+        `;
+        grid.appendChild(tile);
+      });
+      document.getElementById('results').style.display = 'block';
+    }
+
+    // global keyboard (single listener)
+    window.addEventListener('keydown', e => {
+      const c = topCard();
+      if (!c || state.lock) return;
+      if (e.key === 'ArrowRight') fling(c, true, { id:+c.dataset.id, name:c.querySelector('.name').textContent.split('— ')[1].toLowerCase() });
+      if (e.key === 'ArrowLeft')  fling(c, false, { id:+c.dataset.id, name:c.querySelector('.name').textContent.split('— ')[1].toLowerCase() });
+    });
+
+    (async function init(){
+      await loadList();
+      document.getElementById('loader').remove();
+    })();
+
+    document.getElementById('start').addEventListener('click', ()=>{
+      document.getElementById('actionBar').style.display = 'flex';
+      buildOrder();
+      mountNext(3);
+      document.getElementById('finish').disabled = false;
+    });
+    document.getElementById('finish').addEventListener('click', showResults);
+    document.getElementById('btnKeep').addEventListener('click', ()=>{
+      const c = topCard(); if (!c) return;
+      fling(c, true, { id:+c.dataset.id, name:c.querySelector('.name').textContent.split('— ')[1].toLowerCase() });
+    });
+    document.getElementById('btnDiscard').addEventListener('click', ()=>{
+      const c = topCard(); if (!c) return;
+      fling(c, false, { id:+c.dataset.id, name:c.querySelector('.name').textContent.split('— ')[1].toLowerCase() });
+    });
+  </script>
+</body>
+</html>
