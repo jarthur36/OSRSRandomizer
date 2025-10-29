@@ -55,6 +55,8 @@
     .round.discard { border-color: rgba(239,68,68,.5); }
     .round.keep    { border-color: rgba(22,163,74,.5); }
     .footerNote { margin-top: 10px; color: var(--muted); font-size: 13px; }
+
+    /* Results */
     .results { display:none; margin-top: 20px; }
     .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:12px; }
     .tile {
@@ -76,6 +78,7 @@
         <button id="finish" disabled>Finish</button>
       </div>
     </header>
+
     <div id="stack" class="stack">
       <div id="loader" class="card" style="display:grid; place-items:center;">
         <div>
@@ -83,12 +86,15 @@
           <div class="footerNote">First load fetches names & caches them locally.</div>
         </div>
       </div>
+      <!-- Cards injected here -->
     </div>
+
     <div class="actions">
       <button id="btnDiscard" class="round discard" title="Discard (Left)">❌</button>
       <button id="btnKeep" class="round keep" title="Keep (Right)">✅</button>
     </div>
     <div class="footerNote">Tip: ← / → keys also work. Swipe on touch.</div>
+
     <section class="results" id="results">
       <h2>Kept Pokémon (<span id="keptCount">0</span>)</h2>
       <div style="margin:8px 0;">
@@ -98,39 +104,216 @@
       <div class="grid" id="keptGrid"></div>
     </section>
   </div>
+
   <script>
     const API_LIST = 'https://pokeapi.co/api/v2/pokemon?limit=2000';
     const ART_URL = id => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${id}.png`;
-    const state = { all: [], order: [], idx: 0, kept: [], discarded: [], cacheKey: 'pokeswipe:list:v1' };
+
+    const state = {
+      all: [], order: [], idx: 0,
+      kept: [], discarded: [],
+      dragging: false, startX: 0, currentX: 0, currentCard: null,
+      cacheKey: 'pokeswipe:list:v1'
+    };
+
     async function loadList() {
       const cached = localStorage.getItem(state.cacheKey);
       if (cached) { state.all = JSON.parse(cached); return; }
       const res = await fetch(API_LIST);
+      if (!res.ok) throw new Error('Failed to load Pokédex list');
       const data = await res.json();
-      const list = data.results.map(r => {
-        const m = r.url.match(/\/pokemon\/(\d+)\//);
-        return m ? { id: +m[1], name: r.name } : null;
-      }).filter(Boolean).sort((a,b) => a.id - b.id);
+      // data.results: [{name, url}] → id from url
+      const list = data.results
+        .map(r => {
+          const m = r.url.match(/\/pokemon\/(\d+)\//);
+          return m ? { id: +m[1], name: r.name } : null;
+        })
+        .filter(Boolean)
+        .filter(p => p.id <= 20000) // safety filter vs. forms with huge ids
+        .sort((a,b) => a.id - b.id);
       state.all = list;
       localStorage.setItem(state.cacheKey, JSON.stringify(list));
     }
-    function shuffle(arr){for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}return arr;}
-    function titleCase(n){return n.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
-    function buildOrder(){const base=state.all.slice();state.order=document.getElementById('randomize').checked?shuffle(base):base;state.idx=0;}
-    function createCard(p){const c=document.createElement('div');c.className='card';c.innerHTML=`
-      <div class="artWrap"><img src="${ART_URL(p.id)}" alt="${titleCase(p.name)}"></div>
-      <div class="meta"><div class="name">#${String(p.id).padStart(4,'0')} — ${titleCase(p.name)}</div><div class="dex">National Dex</div></div>`;
-      c.onclick=()=>fling(c,0,0,true,p);return c;}
-    function mountNext(n=3){const st=document.getElementById('stack');const existing=[...st.querySelectorAll('.card')];const need=Math.max(0,n-existing.length);
-      for(let i=0;i<need&&state.idx<state.order.length;i++){const p=state.order[state.idx++];st.appendChild(createCard(p));}
-      if(state.idx>=state.order.length&&st.querySelectorAll('.card').length<=1)showResults();}
-    function fling(card,x,y,keep,p){if(!card.isConnected)return;card.remove();(keep?state.kept:state.discarded).push(p);mountNext(3);}
-    function showResults(){document.getElementById('stack').innerHTML='';const kept=state.kept;document.getElementById('keptCount').textContent=kept.length;
-      const grid=document.getElementById('keptGrid');grid.innerHTML='';kept.forEach(p=>{const t=document.createElement('div');t.className='tile';t.innerHTML=`
-        <img src="${ART_URL(p.id)}"><div class="label">#${String(p.id).padStart(4,'0')}<br>${titleCase(p.name)}</div>`;grid.appendChild(t);});
-      document.getElementById('results').style.display='block';}
-    (async()=>{await loadList();document.getElementById('loader').remove();})();document.getElementById('start').onclick=()=>{buildOrder();mountNext(3);};
-    document.getElementById('finish').onclick=showResults;
+
+    function shuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    function titleCase(name) {
+      return name.replace(/-/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    function buildOrder() {
+      const base = state.all.slice(); // copy
+      state.order = document.getElementById('randomize').checked ? shuffle(base) : base;
+      state.idx = 0;
+    }
+
+    function createCard(p) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div class="hint"><span class="left">Discard</span><span class="right">Keep</span></div>
+        <div class="artWrap">
+          <img loading="lazy" alt="${titleCase(p.name)}" src="${ART_URL(p.id)}"
+               onerror="this.src='https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${p.id}.png'">
+        </div>
+        <div class="meta">
+          <div class="name">#${String(p.id).padStart(4,'0')} — ${titleCase(p.name)}</div>
+          <div class="dex">National Dex</div>
+        </div>
+      `;
+      attachDrag(card, p);
+      return card;
+    }
+
+    function mountNext(n=3) {
+      const stack = document.getElementById('stack');
+      const existing = [...stack.querySelectorAll('.card')].filter(c => !c.id);
+      const need = Math.max(0, n - existing.length);
+      for (let i=0; i<need && state.idx < state.order.length; i++) {
+        const p = state.order[state.idx++];
+        const c = createCard(p);
+        c.style.zIndex = 100 - existing.length - i;
+        stack.appendChild(c);
+      }
+      document.getElementById('finish').disabled = state.kept.length + state.discarded.length < 1;
+      if (state.idx >= state.order.length && stack.querySelectorAll('.card').length <= 1) {
+        // end reached
+        showResults();
+      }
+    }
+
+    function attachDrag(card, pokemon) {
+      let x = 0, y = 0, startX = 0, startY = 0;
+      const hint = card.querySelector('.hint');
+
+      const setTransform = () => {
+        const rot = x / 18;
+        card.style.transform = `translate(${x}px, ${y}px) rotate(${rot}deg)`;
+        const abs = Math.abs(x);
+        const alpha = Math.min(abs / 120, 1);
+        hint.classList.toggle('show', abs > 10);
+        hint.style.opacity = 0.1 + alpha * 0.35;
+        hint.querySelector('.left').style.opacity  = x < 0 ? 0.2 + alpha * 0.8 : 0.15;
+        hint.querySelector('.right').style.opacity = x > 0 ? 0.2 + alpha * 0.8 : 0.15;
+      };
+
+      const onPointerDown = e => {
+        card.setPointerCapture(e.pointerId);
+        startX = e.clientX; startY = e.clientY;
+        card.style.transition = 'none';
+      };
+      const onPointerMove = e => {
+        if (startX === 0 && startY === 0) return;
+        x = e.clientX - startX; y = e.clientY - startY;
+        setTransform();
+      };
+      const onPointerUp = e => {
+        const threshold = 140;
+        const velocityX = e.velocityX || 0; // some browsers expose this
+        const decided = Math.abs(x) > threshold || Math.abs(velocityX) > 1.2;
+        if (decided) {
+          const keep = x > 0;
+          fling(card, x, y, keep, pokemon);
+        } else {
+          card.style.transition = 'transform .25s ease';
+          x = y = 0; setTransform();
+          setTimeout(()=>{ card.style.transition = 'none'; }, 250);
+        }
+        startX = startY = 0;
+      };
+
+      card.addEventListener('pointerdown', onPointerDown);
+      card.addEventListener('pointermove',  onPointerMove);
+      card.addEventListener('pointerup',    onPointerUp);
+      card.addEventListener('pointercancel',onPointerUp);
+      // Click blockers so selecting text doesn't interfere
+      card.addEventListener('dragstart', e => e.preventDefault());
+      // Buttons:
+      document.getElementById('btnKeep').onclick    = () => fling(card,  160, 0, true,  pokemon);
+      document.getElementById('btnDiscard').onclick = () => fling(card, -160, 0, false, pokemon);
+      // Keyboard:
+      window.addEventListener('keydown', (e) => {
+        if (!card.isConnected) return;
+        if (e.key === 'ArrowRight') fling(card,  160, 0, true,  pokemon);
+        if (e.key === 'ArrowLeft')  fling(card, -160, 0, false, pokemon);
+      }, { passive:true });
+    }
+
+    function fling(card, x, y, keep, pokemon) {
+      if (!card.isConnected) return;
+      const dx = keep ? window.innerWidth : -window.innerWidth;
+      card.style.transition = 'transform .28s ease-out, opacity .28s ease-out';
+      card.style.transform = `translate(${dx}px, ${y}px) rotate(${x/12}deg)`;
+      card.style.opacity = '0';
+      setTimeout(() => {
+        card.remove();
+        (keep ? state.kept : state.discarded).push(pokemon);
+        mountNext(3);
+      }, 240);
+    }
+
+    function showResults() {
+      document.getElementById('stack').innerHTML = '';
+      document.querySelector('.actions').style.display = 'none';
+      document.getElementById('finish').disabled = true;
+
+      const kept = state.kept;
+      document.getElementById('keptCount').textContent = kept.length;
+      const grid = document.getElementById('keptGrid');
+      grid.innerHTML = '';
+      kept.forEach(p => {
+        const tile = document.createElement('div');
+        tile.className = 'tile';
+        tile.innerHTML = `
+          <img loading="lazy" src="${ART_URL(p.id)}" alt="${titleCase(p.name)}"
+               onerror="this.src='https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${p.id}.png'">
+          <div class="label">#${String(p.id).padStart(4,'0')}<br>${titleCase(p.name)}</div>
+        `;
+        grid.appendChild(tile);
+      });
+      document.getElementById('results').style.display = 'block';
+    }
+
+    // Copy kept names to clipboard
+    async function copyNames() {
+      const names = state.kept.map(p => titleCase(p.name)).join(', ');
+      try {
+        await navigator.clipboard.writeText(names);
+        document.getElementById('copyStatus').textContent = 'Copied!';
+        setTimeout(()=> document.getElementById('copyStatus').textContent = '', 1200);
+      } catch {
+        document.getElementById('copyStatus').textContent = 'Clipboard blocked';
+        setTimeout(()=> document.getElementById('copyStatus').textContent = '', 1500);
+      }
+    }
+
+    // Wiring
+    (async function init() {
+      try {
+        await loadList(); // may use cache
+        document.getElementById('loader').remove();
+        // mount a few immediately after clicking Start
+      } catch (e) {
+        console.error(e);
+        alert('Failed to load Pokédex. Try again.');
+      }
+    })();
+
+    document.getElementById('start').addEventListener('click', () => {
+      document.querySelector('.actions').style.display = 'flex';
+      buildOrder();
+      mountNext(3);
+      document.getElementById('finish').disabled = false;
+    });
+
+    document.getElementById('finish').addEventListener('click', showResults);
+    document.getElementById('copyNames').addEventListener('click', copyNames);
   </script>
 </body>
 </html>
